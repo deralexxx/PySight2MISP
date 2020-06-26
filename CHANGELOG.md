@@ -1,3 +1,4 @@
+
 PySight 1.3.2 (2020-06-24)
 ===========================
 - Don't publish events multiple times after each update. Instead, publish all newly created events at the end of the 
