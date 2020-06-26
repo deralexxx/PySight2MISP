@@ -1,3 +1,12 @@
+PySight 1.3.2 (2020-06-24)
+===========================
+- Don't publish events multiple times after each update. Instead, publish all newly created events at the end of the 
+script.
+
+PySight 1.3.1 (2020-06-17)
+===========================
+- Improve determination whether an IP address is a source or destination IP address.
+
 PySight 1.3 (2020-05-08)
 ===========================
 - Improvements in Threading.
