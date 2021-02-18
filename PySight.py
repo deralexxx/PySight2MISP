@@ -20,7 +20,7 @@ import hashlib
 import hmac
 import json
 import os
-from pymisp import ExpandedPyMISP, MISPEvent, MISPObject
+from pymisp import PyMISP, MISPEvent, MISPObject
 #from pymisp import PyMISP, MISPEvent, MISPObject
 import requests
 import sys
@@ -105,7 +105,7 @@ def update_misp_event(misp_instance, event, isight_alert):
 
     # Verify that misp_instance is of the correct type
     #if not isinstance(misp_instance, PyMISP):
-    if not isinstance(misp_instance, ExpandedPyMISP):
+    if not isinstance(misp_instance, PyMISP):
         PySight_settings.logger.error('Parameter misp_instance is not a PyMISP object')
         return False
 
@@ -346,7 +346,7 @@ def update_misp_event(misp_instance, event, isight_alert):
 
 
 # Create a new MISP event.
-def create_misp_event(misp_instance, isight_report_instance):
+def create_misp_event(misp_instance, isight_report_instance, event_tags):
     # No MISP event for this iSight report ID exists yet.
     # Alas, create a new MISP event.
 
@@ -382,9 +382,9 @@ def create_misp_event(misp_instance, isight_report_instance):
     new_events.append(my_event['id'])
 
     # Add default tags to the event.
-    misp_instance.tag(my_event, 'basf:classification="internal"')
-    #misp_instance.tag(my_event, 'basf:source="iSight"')
-    misp_instance.tag(my_event, 'tlp:amber')
+    if event_tags:
+        for event_tag in event_tags:
+            misp_instance.tag(my_event, event_tag)
 
     # Use some iSight ThreatScapes for event tagging. Reports can have multiple ThreatScapes.
     if 'Cyber Espionage' in isight_report_instance.ThreatScape:
@@ -501,7 +501,7 @@ def get_misp_instance():
 
     try:
         # URL of the MISP instance, API key and SSL certificate validation are taken from the config file.
-        return ExpandedPyMISP(PySight_settings.MISP_URL, PySight_settings.MISP_KEY, PySight_settings.MISP_VERIFYCERT,
+        return PyMISP(PySight_settings.MISP_URL, PySight_settings.MISP_KEY, PySight_settings.MISP_VERIFYCERT,
                               proxies=misp_proxies)
         #return PyMISP(PySight_settings.MISP_URL, PySight_settings.MISP_KEY, PySight_settings.MISP_VERIFYCERT,
         #              proxies=misp_proxies)
@@ -511,7 +511,7 @@ def get_misp_instance():
 
 
 # Process one FireEye iSight report and convert it into a MISP events.
-def process_isight_indicator(isight_json, t_semaphore, t_lock):
+def process_isight_indicator(isight_json, event_tags, t_semaphore, t_lock):
     """
     Create a pySightAlert instance of the json and make all the mappings
 
@@ -557,7 +557,7 @@ def process_isight_indicator(isight_json, t_semaphore, t_lock):
             # Create a new MISP event
             PySight_settings.logger.debug('No event found for report ID %s -- will create a new one',
                                           isight_report_instance.reportId)
-            create_misp_event(this_misp_instance, isight_report_instance)
+            create_misp_event(this_misp_instance, isight_report_instance, event_tags)
             t_lock.release()
         else:
             t_lock.release()
@@ -585,7 +585,7 @@ def process_isight_indicator(isight_json, t_semaphore, t_lock):
 
 
 # Process all FireEye iSight reports and convert them to MISP events.
-def misp_process_isight_indicators(a_result):
+def misp_process_isight_indicators(a_result, event_tags):
     """
     :param a_result:
     :type a_result:
@@ -600,7 +600,8 @@ def misp_process_isight_indicators(a_result):
     # Process each indicator in the JSON message
     for indicator in a_result['message']:
         # Define and start a thread
-        t = threading.Thread(target=process_isight_indicator, args=(indicator, thread_limiter, thread_locker))
+        t = threading.Thread(target=process_isight_indicator, args=(indicator, event_tags, thread_limiter,
+                                                                    thread_locker))
         threads.append(t)
         t.start()
 
@@ -611,6 +612,7 @@ def misp_process_isight_indicators(a_result):
     misp_instance = get_misp_instance()
     global new_events
     for event_id in new_events:
+        PySight_settings.logger.debug('Publishing event %s', event_id)
         misp_instance.publish(event_id, alert=False)
 
 
@@ -682,7 +684,7 @@ def isight_load_data(a_url, a_query, a_header):
             timestring = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d-%H%M%S')
             if not os.path.exists('debug'):
                 os.makedirs('debug')
-            f = open('debug/' + timestring, 'w')
+            f = open(os.path.join('debug', timestring), 'w')
             f.write(json.dumps(json_return_data_cleaned, sort_keys=True, indent=6, separators=(',', ': ')))
             f.close()
 
@@ -895,7 +897,7 @@ if __name__ == '__main__':
         # Use a global list of newly created MISP events so that we can publish them once the script is finished
         # instead of after each update of the event.
         new_events = []
-        misp_process_isight_indicators(result)
+        misp_process_isight_indicators(result, PySight_settings.MISP_EVENTTAGS)
 
     PySight_settings.logger.info('PySight2MISP finished at %s', datetime.datetime.now(datetime.timezone.utc))
     # If loglevel equals DEBUG, log the time the script ran.
