@@ -3,50 +3,64 @@ import logging
 
 
 # Initialize the config parser
-config = configparser.RawConfigParser()
+config = configparser.ConfigParser()
 
 # Read the config file and set config values
 config.read('config.cfg')
 
-LOG_LEVEL = config.get('general', 'log_level')
-use_threading = config.getboolean('general', 'use_threading')
+# Fall back to log level "WARNING" if not specified.
+LOG_LEVEL = config['general'].get('log_level', 'WARNING')
+
+THREADING = config['general'].getboolean('use_threading', fallback=False)
 # If threading is requested, set the number of threads according to the configuration.
 # Otherwise only use one thread.
-if use_threading:
-    number_threads = config.getint('general', 'number_threads')
+if THREADING:
+    NUMBER_THREADS = config['general'].getint('number_threads', fallback=1)
 else:
-    number_threads = 1
+    NUMBER_THREADS = 1
 
-isight_url = config.get('isight', 'isight_url')
-isight_priv_key = config.get('isight', 'isight_priv_key')
-isight_pub_key = config.get('isight', 'isight_pub_key')
-isight_last_hours = config.getint('isight', 'last_hours')
+ISIGHT_URL = config['isight'].get('isight_url')
+ISIGHT_KEY = config['isight'].get('isight_pub_key')
+ISIGHT_SECRET = config['isight'].get('isight_priv_key')
+ISIGHT_ORG = config['isight'].get('isight_organization', '')
+ISIGHT_VERIFYCERT = config['isight'].getboolean('isight_verifycert')
+HOURS = config['isight'].getint('last_hours')
 
-misp_url = config.get('MISP', 'misp_url')
-misp_key = config.get('MISP', 'misp_key')
-misp_verifycert = config.getboolean('MISP', 'misp_verifycert')
+MISP_URL = config['MISP'].get('misp_url')
+MISP_KEY = config['MISP'].get('misp_key')
+MISP_VERIFYCERT = config['MISP'].getboolean('misp_verifycert', fallback=True)
+misp_eventtags = config['MISP'].get('misp_eventtags')
+if misp_eventtags == '' or misp_eventtags is None:
+    MISP_EVENTTAGS = False
+else:
+    MISP_EVENTTAGS = misp_eventtags.split(',')
 
+ISIGHT_PROXY = config['proxy'].getboolean('use_isight_proxy', fallback=False)
+MISP_PROXY = config['proxy'].getboolean('use_misp_proxy', fallback=False)
+if ISIGHT_PROXY or MISP_PROXY:
+    PROXY_URL = config['proxy'].get('full', '')
+    if PROXY_URL == '':
+        print('Proxy usage requested but no proxy specified. Please check "config.cfg".')
+        PROXIES = {}
+    else:
+        PROXIES = {
+            "http": PROXY_URL,
+            "https": PROXY_URL
+        }
+else:
+    PROXIES = {}
 
-USE_ISIGHT_PROXY = config.getboolean('proxy', 'use_isight_proxy')
-USE_MISP_PROXY = config.getboolean('proxy', 'use_misp_proxy')
-if USE_ISIGHT_PROXY or USE_MISP_PROXY:
-    PROXY_HOST = config.get('proxy', 'host')
-    PROXY_PORT = config.get('proxy', 'port')
-    PROXY_PROTOCOL = config.get('proxy', 'protocol')
-    proxy = config.get('proxy', 'full')
-    proxy_address = proxy
-
-debug_mode = False
+DEBUG_MODE = False
 
 # Create a logger.
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('PySight')
 # Set the loglevel, also for imported modules.
 if LOG_LEVEL.upper() == 'DEBUG':
     logger.setLevel(logging.DEBUG)
     # Pymisp DEBUG logging would include the authorization key which we want to avoid
     logging.getLogger('pymisp').setLevel(logging.INFO)
     logging.getLogger('urllib3').setLevel(logging.DEBUG)
-    debug_mode = True
+    DEBUG_MODE = True
 elif LOG_LEVEL.upper() == 'INFO':
     logger.setLevel(logging.INFO)
     logging.getLogger('pymisp').setLevel(logging.INFO)

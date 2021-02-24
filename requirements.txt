@@ -1,5 +1,7 @@
 configparser
 datetime
+misp_stix_converter
 pymisp>=2.4.112
 requests
+stix2
 urllib3

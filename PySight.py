@@ -20,7 +20,7 @@ import hashlib
 import hmac
 import json
 import os
-from pymisp import ExpandedPyMISP, MISPEvent, MISPObject
+from pymisp import PyMISP, MISPEvent, MISPObject
 #from pymisp import PyMISP, MISPEvent, MISPObject
 import requests
 import sys
@@ -105,7 +105,7 @@ def update_misp_event(misp_instance, event, isight_alert):
 
     # Verify that misp_instance is of the correct type
     #if not isinstance(misp_instance, PyMISP):
-    if not isinstance(misp_instance, ExpandedPyMISP):
+    if not isinstance(misp_instance, PyMISP):
         PySight_settings.logger.error('Parameter misp_instance is not a PyMISP object')
         return False
 
@@ -248,7 +248,6 @@ def update_misp_event(misp_instance, event, isight_alert):
             # Add veris tag to attribute.
             new_attr.add_tag('veris:action:malware:variety="C2"')
     # If the report doesn't contain a hostname but contains an IP address, create an ip-src or ip-dst attribute.
-    # TODO: Is there a better way to determine whether it's a source or destination IP address?
     elif isight_alert.ip:
         # Add the protocol to the comment if it is provided by iSight.
         if isight_alert.protocol:
@@ -259,23 +258,29 @@ def update_misp_event(misp_instance, event, isight_alert):
                 ip_comment = default_comment + '; ' + add_comment
         else:
             ip_comment = default_comment
-        if isight_alert.networkIdentifier == 'Attacker':
-            # Might be source or destination, but likelihood of source is higher.
-            ip_type = 'ip-src'
-            if isight_alert.networkType == 'C&C':
-                ip_type = 'ip-dst'
-        elif isight_alert.networkIdentifier == 'Compromised':
-            # Might be source or destination, but likelihood of destination is higher.
+        # Determine whether it's a source or destination IP address.
+        # For specific network types, the IP address should be a destination IP address.
+        if isight_alert.networkType == 'URL' or isight_alert.networkType == 'C&C' or \
+                isight_alert.networkType == 'downloadLink' or isight_alert.networkType == 'maliciousLink' or \
+                isight_alert.networkType == 'wateringHole':
             ip_type = 'ip-dst'
-        elif isight_alert.networkIdentifier == 'Related':
-            # Might be source or destination, but likelihood of source is higher.
-            ip_type = 'ip-src'
-        elif isight_alert.networkIdentifier == 'Victim':
-            # Might be source or destination, but likelihood of destination is higher.
-            ip_type = 'ip-dst'
+        # Else (networkType == 'network'), we determine the IP address type based on the network identifier.
         else:
-            # Might be source or destination, but likelihood of source is higher.
-            ip_type = 'ip-src'
+            if isight_alert.networkIdentifier == 'Attacker':
+                # Might be source or destination, but likelihood of source is higher.
+                ip_type = 'ip-src'
+            elif isight_alert.networkIdentifier == 'Compromised':
+                # Might be source or destination, but likelihood of destination is higher.
+                ip_type = 'ip-dst'
+            elif isight_alert.networkIdentifier == 'Related':
+                # Might be source or destination, but likelihood of source is higher.
+                ip_type = 'ip-src'
+            elif isight_alert.networkIdentifier == 'Victim':
+                # Might be source or destination, but likelihood of destination is higher.
+                ip_type = 'ip-dst'
+            else:
+                # Might be source or destination, but likelihood of source is higher.
+                ip_type = 'ip-src'
         if isight_alert.port:
             # If a port is provided, it's likely a destination IP address.
             ip_type = 'ip-dst'
@@ -339,13 +344,9 @@ def update_misp_event(misp_instance, event, isight_alert):
     # Finally, commit the event additions to the MISP instance.
     misp_instance.update_event(event)
 
-    # Lastly, publish the event without sending an alert email.
-    # This command expects the event ID instead of a MISPevent as argument.
-    misp_instance.publish(event['id'], alert=False)
-
 
 # Create a new MISP event.
-def create_misp_event(misp_instance, isight_report_instance):
+def create_misp_event(misp_instance, isight_report_instance, event_tags):
     # No MISP event for this iSight report ID exists yet.
     # Alas, create a new MISP event.
 
@@ -376,11 +377,14 @@ def create_misp_event(misp_instance, isight_report_instance):
     # Push the event to the MISP server.
     my_event = misp_instance.add_event(event, pythonify=True)
     PySight_settings.logger.debug('Created MISP event %s for iSight report %s', event, isight_report_instance.reportId)
+    # Add the event ID to the global list of newly created events.
+    global new_events
+    new_events.append(my_event['id'])
 
     # Add default tags to the event.
-    misp_instance.tag(my_event, 'basf:classification="internal"')
-    #misp_instance.tag(my_event, 'basf:source="iSight"')
-    misp_instance.tag(my_event, 'tlp:amber')
+    if event_tags:
+        for event_tag in event_tags:
+            misp_instance.tag(my_event, event_tag)
 
     # Use some iSight ThreatScapes for event tagging. Reports can have multiple ThreatScapes.
     if 'Cyber Espionage' in isight_report_instance.ThreatScape:
@@ -487,19 +491,19 @@ def get_misp_instance():
     :rtype: PyMISP
     """
     # Proxy settings are taken from the config file and converted to a dict.
-    if PySight_settings.USE_MISP_PROXY:
+    if PySight_settings.MISP_PROXY:
         misp_proxies = {
-            'http': str(PySight_settings.proxy_address),
-            'https': str(PySight_settings.proxy_address)
+            'http': str(PySight_settings.PROXY_URL),
+            'https': str(PySight_settings.PROXY_URL)
         }
     else:
         misp_proxies = {}
 
     try:
         # URL of the MISP instance, API key and SSL certificate validation are taken from the config file.
-        return ExpandedPyMISP(PySight_settings.misp_url, PySight_settings.misp_key, PySight_settings.misp_verifycert,
+        return PyMISP(PySight_settings.MISP_URL, PySight_settings.MISP_KEY, PySight_settings.MISP_VERIFYCERT,
                               proxies=misp_proxies)
-        #return PyMISP(PySight_settings.misp_url, PySight_settings.misp_key, PySight_settings.misp_verifycert,
+        #return PyMISP(PySight_settings.MISP_URL, PySight_settings.MISP_KEY, PySight_settings.MISP_VERIFYCERT,
         #              proxies=misp_proxies)
     except Exception:
         PySight_settings.logger.error('Unexpected error in MISP init: %s', sys.exc_info())
@@ -507,7 +511,7 @@ def get_misp_instance():
 
 
 # Process one FireEye iSight report and convert it into a MISP events.
-def process_isight_indicator(isight_json, t_semaphore, t_lock):
+def process_isight_indicator(isight_json, event_tags, t_semaphore, t_lock):
     """
     Create a pySightAlert instance of the json and make all the mappings
 
@@ -518,7 +522,7 @@ def process_isight_indicator(isight_json, t_semaphore, t_lock):
     # Acquire a semaphore (decrease the counter in the semaphore).
     t_semaphore.acquire()
     PySight_settings.logger.debug("Starting thread number %s out of max. %s threads", threading.active_count(),
-                                  PySight_settings.number_threads)
+                                  PySight_settings.NUMBER_THREADS)
     PySight_settings.logger.debug('Processing report %s', isight_json['reportId'])
 
     try:
@@ -533,7 +537,7 @@ def process_isight_indicator(isight_json, t_semaphore, t_lock):
         isight_report_instance = pySightReport(isight_json)
 
         # If in DEBUG mode, write the iSight reports to a file
-        if PySight_settings.debug_mode:
+        if PySight_settings.DEBUG_MODE:
             # Create the "reports" subdirectory for storing iSight reports, if it doesn't exist already
             if not os.path.exists("reports"):
                 os.makedirs("reports")
@@ -553,7 +557,7 @@ def process_isight_indicator(isight_json, t_semaphore, t_lock):
             # Create a new MISP event
             PySight_settings.logger.debug('No event found for report ID %s -- will create a new one',
                                           isight_report_instance.reportId)
-            create_misp_event(this_misp_instance, isight_report_instance)
+            create_misp_event(this_misp_instance, isight_report_instance, event_tags)
             t_lock.release()
         else:
             t_lock.release()
@@ -581,20 +585,35 @@ def process_isight_indicator(isight_json, t_semaphore, t_lock):
 
 
 # Process all FireEye iSight reports and convert them to MISP events.
-def misp_process_isight_indicators(a_result):
+def misp_process_isight_indicators(a_result, event_tags):
     """
     :param a_result:
     :type a_result:
     """
 
     # Use both a semaphore and lock for threading.
-    thread_limiter = threading.Semaphore(PySight_settings.number_threads)
+    thread_limiter = threading.Semaphore(PySight_settings.NUMBER_THREADS)
     thread_locker = _thread.allocate_lock()
 
+    # Create a list of all threads.
+    threads = []
     # Process each indicator in the JSON message
     for indicator in a_result['message']:
         # Define and start a thread
-        threading.Thread(target=process_isight_indicator, args=(indicator, thread_limiter, thread_locker)).start()
+        t = threading.Thread(target=process_isight_indicator, args=(indicator, event_tags, thread_limiter,
+                                                                    thread_locker))
+        threads.append(t)
+        t.start()
+
+    # Wait for all threads to finish.
+    for t in threads:
+        t.join()
+    # When done, publish all the newly created MISP events.
+    misp_instance = get_misp_instance()
+    global new_events
+    for event_id in new_events:
+        PySight_settings.logger.debug('Publishing event %s', event_id)
+        misp_instance.publish(event_id, alert=False)
 
 
 # Make the FireEye iSight API request.
@@ -614,22 +633,23 @@ def isight_load_data(a_url, a_query, a_header):
     url_to_load = a_url + a_query
 
     # Set the proxy if specified
-    if PySight_settings.USE_ISIGHT_PROXY:
+    if PySight_settings.ISIGHT_PROXY:
         isight_proxies = {
-            'http': PySight_settings.proxy_address,
-            'https': PySight_settings.proxy_address
+            'http': PySight_settings.PROXY_URL,
+            'https': PySight_settings.PROXY_URL
         }
-        PySight_settings.logger.debug('Connecting to FireEye iSight via proxy %s', PySight_settings.proxy_address)
+        PySight_settings.logger.debug('Connecting to FireEye iSight via proxy %s', PySight_settings.PROXY_URL)
     else:
         isight_proxies = {}
         PySight_settings.logger.debug('Connecting directly to FireEye iSight without a proxy',
-                                      PySight_settings.proxy_address)
+                                      PySight_settings.PROXY_URL)
 
     PySight_settings.logger.debug('FireEye iSight request URL: %s', url_to_load)
     PySight_settings.logger.debug('FireEye iSight request header: %s', a_header)
 
     try:
-        r = requests.get(url_to_load, headers=a_header, proxies=isight_proxies, verify=False)
+        r = requests.get(url_to_load, headers=a_header, proxies=isight_proxies,
+                         verify=PySight_settings.ISIGHT_VERIFYCERT)
     except urllib.error.HTTPError as e:
         PySight_settings.logger.error('Urllib HTTP error code: %s', e.code)
         PySight_settings.logger.error('Urllib HTTP error message: %s', e.read())
@@ -660,11 +680,11 @@ def isight_load_data(a_url, a_query, a_header):
         return False
     else:
         # For debugging purposes, write the returned IOCs to a file
-        if PySight_settings.debug_mode:
+        if PySight_settings.DEBUG_MODE:
             timestring = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d-%H%M%S')
             if not os.path.exists('debug'):
                 os.makedirs('debug')
-            f = open('debug/' + timestring, 'w')
+            f = open(os.path.join('debug', timestring), 'w')
             f.write(json.dumps(json_return_data_cleaned, sort_keys=True, indent=6, separators=(',', ': ')))
             f.close()
 
@@ -863,29 +883,32 @@ def data_text_search_filter(url, public_key, private_key):
 if __name__ == '__main__':
     # If loglevel equals DEBUG, log the time the script ran.
     PySight_settings.logger.info('PySight2MISP started at %s', datetime.datetime.now(datetime.timezone.utc))
-    if PySight_settings.debug_mode:
+    if PySight_settings.DEBUG_MODE:
         # This is to log the time used to run the script
         from timeit import default_timer as timer
         start = timer()
 
     # Retrieve FireEye iSight indicators of the last x hours.
-    result = isight_search_indicators(PySight_settings.isight_url, PySight_settings.isight_pub_key,
-                                      PySight_settings.isight_priv_key, PySight_settings.isight_last_hours)
+    result = isight_search_indicators(PySight_settings.ISIGHT_URL, PySight_settings.ISIGHT_KEY,
+                                      PySight_settings.ISIGHT_SECRET, PySight_settings.HOURS)
     if result is False:
         PySight_settings.logger.warning('No indicators available from FireEye iSight')
     else:
-        misp_process_isight_indicators(result)
+        # Use a global list of newly created MISP events so that we can publish them once the script is finished
+        # instead of after each update of the event.
+        new_events = []
+        misp_process_isight_indicators(result, PySight_settings.MISP_EVENTTAGS)
 
     PySight_settings.logger.info('PySight2MISP finished at %s', datetime.datetime.now(datetime.timezone.utc))
     # If loglevel equals DEBUG, log the time the script ran.
-    if PySight_settings.debug_mode:
+    if PySight_settings.DEBUG_MODE:
         end = timer()
         PySight_settings.logger.debug('Time taken %s', end - start)
 
     # data_ioc(url, public_key, private_key)
-    # data_text_search_simple(isight_url, public_key, private_key)
-    # data_text_search_filter(isight_url, public_key, private_key)
+    # data_text_search_simple(PySight_settings.ISIGHT_URL, public_key, private_key)
+    # data_text_search_filter(PySight_settings.ISIGHT_URL, public_key, private_key)
     # data_text_search_title(url, public_key, private_key)
     # data_text_search_wildcard(url, public_key, private_key)
-    # data_text_search_sensitive_reports(isight_url, public_key, private_key)
+    # data_text_search_sensitive_reports(PySight_settings.ISIGHT_URL, public_key, private_key)
     # data_advanced_search_filter_indicators(url, public_key, private_key)
